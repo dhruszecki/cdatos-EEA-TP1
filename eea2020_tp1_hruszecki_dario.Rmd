@@ -1,19 +1,303 @@
 ---
 title: "EEA - Trabajo práctico Nro 1"
-author: Darío Hruszecki
-output: html_notebook
-date: 5/10/2020
+author: "Darío Hruszecki"
+date: "5/10/2020"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '6'
+    df_print: paged
+  html_notebook:
+    theme: spacelab
+    toc_depth: 6
+    toc: yes
+    toc_float: yes
+    df_print: paged
 ---
 
+<style type="text/css">
+div.main-container {
+  max-width: 1600px;
+  margin-left: auto;
+  margin-right: auto;
+}
+</style>
 ## Enunciado
 El objetivo general de este trabajo es crear un modelo lineal simple para explicar el precio de venta de las propiedades en Capital Federal reportadas por la empresa Properati.
 Se van a utilizar datos del 2019 para no incorporar comportamientos atípicos ocasionados por la pandemia del COVID-19.
 
 ## Resolución
 Primero vamos a realizar un analisis exploratorios y luego, si es necesario una limpieza del dataset para luego  realizar los modelos solicitados.
+[Repositorio](https://github.com/dhruszecki/cdatos-EEA-TP1)
 
-### Preparacion de datos
+### 1. Preparacion de datos (I)
+#### a. Leer el archivo ar_properties.csv y mostrar su estructura
+```{r}
+library(tidyverse)
+properties_raw = read_csv(here::here("ds", "ar_properties.csv"), col_types = cols())
+glimpse(properties_raw)
+```
+#### b. Quedarse con aquellos registros que:
+    i. Pertenecen a Argentina y Capital Federal
+    ii. Cuyo precio esta en dólares (USD)
+    iii. El tipo de propiedad sea: Departamento, PH o Casa
+    iv. El tipo de operacion sea Venta
+```{r}
+properties <- properties_raw %>% filter(l1 == "Argentina" , l2 == "Capital Federal", 
+                          currency == "USD", property_type %in% c("Departamento", "PH", "Casa"),
+                          operation_type == "Venta")
+```
+    
+#### c. Seleccionar las variables id, l3, rooms, bedrooms, bathrooms, surface_total, surface_covered, price y property_type
+```{r}
+properties <- properties %>% select(id, l3, rooms, bedrooms, bathrooms, surface_total, surface_covered, price, property_type)
+properties %>% glimpse
+```
+### 2. Análisis exploratorios (I)
+#### a. Obtener la cantidad de valores únicos y de valores faltantes (NAs) para cada una de estas variables.
+```{r}
+tabla_exploratorios =  properties %>%
+                                      gather(., 
+                                            key = "variables", 
+                                            value = "valores") %>% # agrupamos por las variables del set
+                                      group_by(variables) %>% 
+                                      summarise(valores_unicos = n_distinct(valores),
+                                      porcentaje_faltantes = sum(is.na(valores))/nrow(properties)*100) %>% 
+                                      arrange(desc(porcentaje_faltantes), valores_unicos)
+
+tabla_exploratorios
+```
+```{r}
+tabla_exploratorios %>%  
+ggplot(., aes(x=reorder(variables, -porcentaje_faltantes), y=porcentaje_faltantes, fill=porcentaje_faltantes)) +
+  geom_bar(stat = "identity") +
+  scale_fill_gradient(high = "firebrick", low = "orange") +
+  scale_x_discrete(label = function(x) stringr::str_trunc(x, 18)) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=80, vjust=0.5), legend.position = "none") +
+  labs(title='Porcentaje de valores faltantes', y='Porcentaje de faltantes', x='') 
+
+```
+
+#### b. Obtener la matriz de correlaciones para las variables numéricas. Pista: usen ‘complete.obs’ para poder omitir los valores faltantes.
+```{r}
+library(corrr)
+# calculo matriz de correlacion para los registros completos (omitiendo faltantes) para variables numéricas con ambos métodos 
+# pearson
+matriz.correl.pe <- properties %>%
+  select_if(is.numeric) %>% # Seleccionamos las variables numéricas
+ correlate(use = "complete.obs", method = "pearson")
+matriz.correl.pe
+
+```
+#### c. Grafique la matriz de correlaciones usando la librería corrr.
+```{r}
+rplot(data.frame(matriz.correl.pe))
+```
+#### d. ¿Cómo es la correlación entre las variables surface_total y surface_covered? ¿Y la correlación entre rooms y bathrooms?
+
+En el caso de *surface_total* y *surface_covered* la correlación lineal es positiva y bastante alta así como tambien para las variables *rooms* y *bathrooms*.
+
+#### e. ¿Cómo es la correlación de la variable a explicar, price, con el resto de las variables?
+
+La variable *price* está positivamente correlacionada con la variables *rooms*, *bedrooms* and *bathrooms*
+
+### 3. Limpieza de datos
+#### a. En el punto 2 deberían haber encontrado que la variable *bedrooms* presenta una alta proporción de valores faltantes y que presenta una fuerte correlación con la variable rooms. Por lo tanto, vamos a eliminarla.
+```{r}
+properties <- subset(properties, select = -c(bedrooms))
+properties
+```
+
+#### b. Eliminar todos los registros que presentan valores faltantes.
+```{r}
+properties <- properties %>% drop_na(rooms) %>% drop_na(bathrooms) %>% 
+  drop_na(surface_covered) %>% drop_na(surface_total) %>% 
+  drop_na(l3) %>% drop_na(property_type) %>% drop_na(price) 
+```
+
+#### c. Eliminar aquellos registros en los cuales la superficie total es menor a la superficie cubierta
+```{r}
+properties <- properties %>% filter(surface_total >= surface_covered)
+properties %>% nrow()
+```
+
+### 4. Análisis exploratorios (II)
+#### a. Crear una nueva variable 'precio_en_miles' que sea la variable price divida por 1000. Obtener estadísticas descriptivas para esta nueva variable (cuartiles, promedio, mínimo y máximo) y realizar un histograma de la misma.
+```{r}
+properties <- properties %>% mutate(precio_en_miles = price / 1000)
+```
 
 ```{r}
-plot(cars)
+resumen=properties %>% 
+              summarise(pem_mean=mean(precio_en_miles),
+                        pem_min=min(precio_en_miles),
+                        pem_max=max(precio_en_miles),
+                        q1=quantile(precio_en_miles, prob = c(0.25)),
+                        q2=quantile(precio_en_miles, prob = c(0.50)),
+                        q3=quantile(precio_en_miles, prob = c(0.75)))
+resumen
 ```
+
+```{r}
+ggplot(properties, aes(x=precio_en_miles)) + geom_histogram(color="black", fill="white", binwidth=2)
+```
+
+
+#### b. Obtener las mismas estadísticas descriptivas de la nueva variable precio_en_miles para cada tipo de propiedad y realizar boxplots paralelos de la variable según tipo de propiedad. ¿Qué diferencias encuentran entre los tipos de propiedad?
+```{r}
+resumen=properties %>% 
+              group_by(property_type) %>% 
+              summarise(pem_mean=mean(precio_en_miles),
+                        pem_min=min(precio_en_miles),
+                        pem_max=max(precio_en_miles),
+                        q1=quantile(precio_en_miles, prob = c(0.25)),
+                        q2=quantile(precio_en_miles, prob = c(0.50)),
+                        q3=quantile(precio_en_miles, prob = c(0.75)))
+resumen
+```
+```{r}
+library(ggplot2)
+library(GGally)
+
+ggplot(properties, aes(x = property_type, y = precio_en_miles, group = property_type, fill = property_type))+
+  geom_boxplot() +
+  labs(title="Boxplot completo")+
+  scale_y_continuous()
+
+ggplot(properties, aes(x = property_type, y = precio_en_miles, group = property_type, fill = property_type))+
+  geom_boxplot() +
+  labs(title="Boxplot completo limitado a 500")+
+  scale_y_continuous(limits = c(0, 500))
+```
+
+Se observa:
+
+* Para las propiedades de tipo *Casa* como las propiedades de tipo *Departamento* nos encontramos con un alto número de outliers, no así con las de tipo *PH*.
+
+* Las Casas y los PH tienden a tener un mayor precio que los departamentos, siendo las casas las que se ubicarían en el primer lugar.
+
+#### c. Realizar un gráfico con la función ggpairs de las variables numéricas (sin abrir por tipo de propiedad). Comenten los aspectos principales que observan en el gráfico
+```{r}
+properties  %>% 
+  select_if(is.numeric) %>% 
+  ggpairs(upper = list(continuous = wrap("cor", size = 3, hjust=0.8, align_percent=0.15))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=45, vjust=0.5), legend.position = "bottom")
+```
+
+Se observa:
+
+* Todas las variables se correlacionan de forma muy baja, con excepción de price y precio_en_miles en donde era esperable encontrar una correlación positiva alta.
+
+* Existen outliers en la mayoría de las variables.
+
+### 5. Outliers
+#### a. Graficar un scatterplot de la variable precio_en_miles y superficie_total. ¿Detectan alguna anomalía?
+```{r}
+ggplot(properties, aes(x = surface_total, y = precio_en_miles)) +
+        geom_point(alpha = 0.75)  +
+        theme_bw() +
+        labs(x="Superficie Total", y="Precio en Miles", title = "Precio en miles vs Superficie Total")
+```
+
+Se observa:
+
+* outliers superiores tanto en precio_en_miles como en surface_total.
+
+#### b. Eliminar los outliers univariados de las variables precio_en_miles, rooms y surface_total. Utilizar y fundamentar el o los criterio/s y métodos que consideren adecuados.
+
+Calculo lo límites superiores para las 3 variables:
+```{r}
+limite.superior.pem = IQR(properties$precio_en_miles) * 1.5 + quantile(properties$precio_en_miles, 0.75)[[1]]
+limite.superior.rooms = IQR(properties$rooms) * 1.5 + quantile(properties$rooms, 0.75)[[1]]
+limite.superior.st = IQR(properties$surface_total) * 1.5 + quantile(properties$surface_total, 0.75)[[1]]
+```
+
+Eliminamos los outliers de las variables precio_en_miles, rooms y surface_total
+```{r}
+properties <- properties %>% filter( precio_en_miles <= limite.superior.pem , rooms <= limite.superior.rooms , surface_total <= limite.superior.st)
+```
+
+### 6. Análisis exploratorios (III)
+#### a. Repetir los análisis exploratorios realizados en el punto 4 al dataset sin outliers. ¿Detectan algún cambio? Explicar.
+
+```{r}
+resumen=properties %>% 
+              summarise(pem_mean=mean(precio_en_miles),
+                        pem_min=min(precio_en_miles),
+                        pem_max=max(precio_en_miles),
+                        q1=quantile(precio_en_miles, prob = c(0.25)),
+                        q2=quantile(precio_en_miles, prob = c(0.50)),
+                        q3=quantile(precio_en_miles, prob = c(0.75)))
+resumen
+```
+```{r}
+ggplot(properties, aes(x=precio_en_miles)) + geom_histogram(color="black", fill="white", binwidth=2)
+```
+
+
+```{r}
+resumen=properties %>% 
+              group_by(property_type) %>% 
+              summarise(pem_mean=mean(precio_en_miles),
+                        pem_min=min(precio_en_miles),
+                        pem_max=max(precio_en_miles),
+                        q1=quantile(precio_en_miles, prob = c(0.25)),
+                        q2=quantile(precio_en_miles, prob = c(0.50)),
+                        q3=quantile(precio_en_miles, prob = c(0.75)))
+resumen
+```
+```{r}
+ggplot(properties, aes(x = property_type, y = precio_en_miles, group = property_type, fill = property_type))+
+  geom_boxplot() +
+  labs(title="Boxplot completo")+
+  scale_y_continuous()
+```
+```{r}
+properties  %>% 
+  select_if(is.numeric) %>% 
+  ggpairs(upper = list(continuous = wrap("cor", size = 3, hjust=0.8, align_percent=0.15))) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle=45, vjust=0.5), legend.position = "bottom")
+```
+
+Se observa:
+
+* No hay correlación entre ningunade las variables a excepción de price y precio_en_miles.
+
+* Las Casas y los PH tienden a tener un mayor precio que los departamentos, siendo las casas las que se ubicarían en el primer lugar.
+
+* No se observan outliers, con la excepción de bathrooms que presenta algunos outliers.
+
+### 7. Modelo lineal
+#### a. Realizar un modelo lineal simple para explicar el precio_en_miles en función de las habitaciones (rooms) y otro modelo que explique el precio en función de la superficie total (surface_total).
+##### Modelo Rooms
+```{r}
+modelo_rooms = lm(formula = precio_en_miles ~ rooms, data = properties)
+```
+##### Modelo Suface_total
+```{r}
+modelo_surface_total = lm(formula = precio_en_miles ~ surface_total, data = properties)
+```
+
+#### b. Usar la función summary() para obtener informacion de ambos modelos. Explicar el significado de los valores de los coeficientes estimados en cada caso.
+##### Modelo Rooms: Significado de coeficientes
+```{r}
+summary(modelo_rooms)
+```
+  * El valor $\hat{\beta_0} = 49.5065$, que representa en teoría el *precio_en_miles* **esperado** para una propiedad de 0 rooms. Por este motivo este valor carece de interpretación práctica.
+  
+  * El valor de $\hat{\beta_1}$ indica que por cada aumento de 1(un) room en la propiedad,  el *precio_en_miles* **esperado** aumenta en $52.2867  
+
+##### Modelo Suface_total: Significado de coeficientes
+```{r}
+summary(modelo_surface_total)
+```
+  * El valor $\hat{\beta_0} = 44.541192$, que representa en teoría el *precio_en_miles* **esperado** para una propiedad de 0 rooms. Por este motivo este valor carece de interpretación práctica.
+  
+  * El valor de $\hat{\beta_1}$ indica que por cada aumento de 1(un) room en la propiedad,  el *precio_en_miles* **esperado** aumenta en $1.961017  
+
+#### c. ¿Cuál modelo usarían para predecir el precio? ¿Por qué?
+
+Utilizando el coeficiente de determinacion $R^2$ para evaluar ambos modelos se llega a la conclusión de que el el modelo con mayor capacidad explicativa es **Modelo Surface_Total**  ya que posee un $R^2$=0.5743, superio al $R^2$=0.3877 del modelo *Modelo Rooms*.
